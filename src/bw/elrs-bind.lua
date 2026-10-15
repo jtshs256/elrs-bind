@@ -76,6 +76,9 @@ local bwFirst=1
 local bwLastStatus=nil
 local bwStatusAt=0
 local BW_STATUS_TICKS=300
+-- 128x96 radios such as the TBS Tango 2 can show three more 8px rows than
+-- 64px-high displays while keeping the status line clear at the bottom.
+local VISIBLE_ROWS=(LCD_H>=96) and 9 or 6
 local history={}
 local bothRxWriteQueued=nil
 local bothPhrase=nil
@@ -198,7 +201,7 @@ local function abandonUidRequest()
 end
 local function acceptLinkSample(connected)
   local sample=connected and LINK_UP or LINK_DOWN
-  -- While requesting a rebind, remember connected samples but do not let a
+  -- While requesting an unbind, remember connected samples but do not let a
   -- delayed pre-command status frame immediately restore the link state.
   if linkState==LINK_WAIT_DOWN and sample==LINK_UP then
     if linkCandidate==sample then linkSamples=linkSamples+1
@@ -450,7 +453,7 @@ local function changeTarget(newTarget)
     newTarget=TARGET_TX
   end
 
-  if timer=="bothTX" or timer=="rebindDone" then status="Finish current operation first";return end
+  if timer=="bothTX" or timer=="unbindDone" then status="Finish current operation first";return end
   abandonUidRequest()
   target=newTarget
   bindRefreshRx=false
@@ -466,7 +469,7 @@ local function changeTarget(newTarget)
 end
 
 startUidRead=function()
-  if timer=="bothTX" or timer=="rebindDone" then status="Finish current operation first";return end
+  if timer=="bothTX" or timer=="unbindDone" then status="Finish current operation first";return end
   if target==TARGET_BOTH then
     uid[1]=0;uid[2]=0;uid[3]=0;uid[4]=0;uid[5]=0;uid[6]=0;uidFrom=nil
     status="Target: Both"
@@ -545,7 +548,7 @@ end
 local function startSet()
   if phrase=="" then status="Enter phrase first";return end
   if #phrase>PHRASE_MAX then status="Phrase > 52 chars";return end
-  if timer=="bothTX" or timer=="rebindDone" then status="Finish current operation first";return end
+  if timer=="bothTX" or timer=="unbindDone" then status="Finish current operation first";return end
   if target==TARGET_BOTH then
     bindRefreshRx=false;uidTimeoutRecovery=false
     abandonUidRequest()
@@ -606,18 +609,18 @@ local function processTimer()
   elseif k=="autoUid" then startUidRead()
   elseif k=="bindDone" then
     if bindRefreshRx then status="Bind sent, waiting RX..." else status="Bind sent" end
-  elseif k=="rebindDone" then
+  elseif k=="unbindDone" then
     if linkState==LINK_WAIT_DOWN then
       if linkCandidate==LINK_UP and linkSamples>=LINK_CONFIRM_SAMPLES then
         linkState=LINK_UP
         status="RX still connected"
       else
         linkState=LINK_UNKNOWN
-        status="RX bind mode requested"
+        status="Unbind sent"
       end
       linkCandidate=nil;linkSamples=0
     else
-      status="RX bind mode requested"
+      status="Unbind sent"
     end
   end
 end
@@ -639,8 +642,8 @@ local function adjustScroll()
   local pos=1
   for i=1,#bwRows do if bwRows[i]==selected then pos=i;break end end
   if pos<bwFirst then bwFirst=pos end
-  if pos>bwFirst+6-1 then bwFirst=pos-6+1 end
-  local m=math.max(1,#bwRows-6+1)
+  if pos>bwFirst+VISIBLE_ROWS-1 then bwFirst=pos-VISIBLE_ROWS+1 end
+  local m=math.max(1,#bwRows-VISIBLE_ROWS+1)
   if bwFirst>m then bwFirst=m end
 end
 local function draw()
@@ -650,7 +653,7 @@ local function draw()
   lcd.drawText(LCD_W-1,1,linkState==LINK_UP and "C" or "-",INVERS+RIGHT+BOLD)
   adjustScroll()
   local y=11
-  local last=math.min(#bwRows,bwFirst+6-1)
+  local last=math.min(#bwRows,bwFirst+VISIBLE_ROWS-1)
   for i=bwFirst,last do
     local id=bwRows[i]
     local a=(id==selected) and INVERS or 0
@@ -660,7 +663,7 @@ local function draw()
       if not uidFrom then lcd.drawText(0,y,"UID: ---",a+SMLSIZE)
       else lcd.drawText(0,y,((uidFrom==RX) and "RX " or "TX ")..uid[1]..","..uid[2]..","..uid[3]..","..uid[4]..","..uid[5]..","..uid[6],a+SMLSIZE) end
     elseif id==ROW_SET then lcd.drawText(10,y,"[Set]",a+BOLD)
-    elseif id==ROW_LINK then lcd.drawText(10,y,linkState==LINK_UP and "[Rebind]" or "[Bind]",a+BOLD)
+    elseif id==ROW_LINK then lcd.drawText(10,y,linkState==LINK_UP and "[Unbind]" or "[Bind]",a+BOLD)
     elseif id==ROW_HISTORY then lcd.drawText(0,y,"> History",a+BOLD)
     elseif id==ROW_EXIT then lcd.drawText(10,y,"[---- EXIT ----]",a+BOLD)
     end
@@ -686,9 +689,9 @@ local function drawHistory()
   end
   local count=#history+2
   if historySelected<historyFirst then historyFirst=historySelected end
-  if historySelected>historyFirst+5 then historyFirst=historySelected-5 end
+  if historySelected>historyFirst+VISIBLE_ROWS-1 then historyFirst=historySelected-VISIBLE_ROWS+1 end
   local y=11
-  for pos=historyFirst,math.min(count,historyFirst+5) do
+  for pos=historyFirst,math.min(count,historyFirst+VISIBLE_ROWS-1) do
     local a=(pos==historySelected) and INVERS or 0
     if pos<=#history then
       local v=history[pos];local n=math.floor((LCD_W-2)/6)
@@ -750,18 +753,18 @@ local function handle(event)
   elseif selected==ROW_UID then startUidRead()
   elseif selected==ROW_SET then startSet()
   elseif selected==ROW_LINK and target==TARGET_RX then
-    if timer=="rebindDone" then status="Finish current operation first";return end
+    if timer=="unbindDone" then status="Finish current operation first";return end
     if linkState==LINK_UP then
       -- RX_BIND requests bind mode; it does not erase the stored UID.
       local previousLinkState=linkState
       abandonUidRequest()
-      status="Requesting RX bind mode..."
+      status="Sending unbind..."
       bindRefreshRx=false
       linkState=LINK_WAIT_DOWN
       linkCandidate=nil
       linkSamples=0
       if crossfireTelemetryPush(COMMAND,bindRx) then
-        schedule(FOLLOW,"rebindDone")
+        schedule(FOLLOW,"unbindDone")
       else
         linkState=previousLinkState
         status="Telemetry busy"

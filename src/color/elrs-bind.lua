@@ -88,8 +88,10 @@ local targetDropdownTarget=0
 local bwPage=nil
 local bwRows={}
 local bwFirst=1
-local BW_MAIN_ROWS=6
-local BW_HISTORY_ROWS=6
+-- Give 128x96 monochrome radios (including the TBS Tango 2) the extra
+-- vertical rows their display supports while preserving the 64px layout.
+local BW_MAIN_ROWS=(LCD_H>=96) and 9 or 6
+local BW_HISTORY_ROWS=(LCD_H>=96) and 9 or 6
 local bwLastStatus=nil
 local bwStatusAt=0
 local BW_STATUS_TICKS=300
@@ -237,7 +239,10 @@ local function acceptLinkSample(connected)
         colorLinkActionAt=0
         colorUnbindPending=false
         colorUidRequested=true
-        selected=ROW_UNBIND
+        -- Keep focus on the action only when it was still on Bind as the
+        -- asynchronous link update arrived. Do not steal focus from Target
+        -- (or another control) while the user is navigating the screen.
+        if selected==ROW_BIND then selected=ROW_UNBIND end
         colorFollowupPending=true
       end
       schedule(WRITE_SETTLE,"readBack")
@@ -358,7 +363,6 @@ local function drain()
         if IS_COLOR and uidFrom==RX and linkState==LINK_UP then
           colorLinkAction=0;colorLinkActionAt=0;colorUnbindPending=false;colorUidRequested=false
           lastRxAlive=true
-          selected=ROW_UNBIND
           status="RX UID refreshed"
         end
         elrsStatusPollAt=getTime()-ELRS_STATUS_POLL
@@ -1188,7 +1192,7 @@ local function handle(event,touchState)
           changeTarget(i);targetDropdown=false;edit=nil;selected=ROW_TARGET;return
         end
       end
-      targetDropdown=false;edit=nil
+      targetDropdown=false;edit=nil;selected=ROW_TARGET
       return
     end
     local historyCount=colorHistoryWindow()
@@ -1251,7 +1255,7 @@ local function handle(event,touchState)
       elseif isPrevEvent(event) then
         changeTarget(target-1)
       elseif event==EVT_VIRTUAL_ENTER or event==EVT_VIRTUAL_EXIT then
-        targetDropdown=false;edit=nil
+        targetDropdown=false;edit=nil;selected=ROW_TARGET
       end
     end
     return
@@ -1259,7 +1263,9 @@ local function handle(event,touchState)
   if isNextEvent(event) or isPrevEvent(event) then
     local rows
     if IS_COLOR then
-      rows={ROW_PHRASE,ROW_SET,ROW_TARGET,ROW_UID}
+      rows={ROW_PHRASE,ROW_SET,ROW_TARGET}
+      local uidEnabled=(target~=TARGET_BOTH) and (target~=TARGET_RX or rxAlive())
+      if uidEnabled then rows[#rows+1]=ROW_UID end
       -- On the color UI, Bind/Unbind follows Request UID in wheel order.
       if target==TARGET_RX then
         if colorLinkAction==0 and not colorUnbindPending and rxAlive() then rows[#rows+1]=ROW_UNBIND
@@ -1278,6 +1284,13 @@ local function handle(event,touchState)
       end
     end
     rows[#rows+1]=ROW_EXIT
+    -- The receiver can disconnect while Request UID has focus. If that makes
+    -- the button unavailable, anchor navigation at Target so this movement
+    -- goes directly to the next enabled control.
+    if IS_COLOR and selected==ROW_UID
+      and (target==TARGET_BOTH or (target==TARGET_RX and not rxAlive())) then
+      selected=ROW_TARGET
+    end
     local pos=nil
     for i=1,#rows do if rows[i]==selected then pos=i;break end end
     if not pos then pos=4 end

@@ -8,7 +8,7 @@ These scripts are an unofficial, independent adaptation. They are not part of, e
 
 | Version | Source | Precompiled | Display | Tested on |
 | --- | --- | --- | --- | --- |
-| Black-and-white | [`src/bw/elrs-bind.lua`](src/bw/elrs-bind.lua) | [`src/bw/elrs-bind.luac`](src/bw/elrs-bind.luac) | Black-and-white LCD | TBS Mambo, TBS Tango 2 |
+| Black-and-white | [`src/bw/elrs-bind.lua`](src/bw/elrs-bind.lua) | [`src/bw/elrs-bind.luac`](src/bw/elrs-bind.luac) | Black-and-white LCD, including 128×96 | TBS Mambo, TBS Tango 2 |
 | Color | [`src/color/elrs-bind.lua`](src/color/elrs-bind.lua) | [`src/color/elrs-bind.luac`](src/color/elrs-bind.luac) | Color LCD | RadioMaster app on AX12 |
 
 The black-and-white version has been tested on a TBS Mambo and TBS Tango 2. The color version has been tested in the RadioMaster app on AX12. These are the tested setups; compatibility with other radios or firmware versions may vary.
@@ -33,7 +33,7 @@ The official ExpressLRS Lua tools support EdgeTX 2.11.6+, 2.12.1+, or 3.0+ on bo
 
 ## Installation
 
-Copy the matching `.lua` script to the radio's scripts directory and launch it through the radio firmware's Lua tool interface. Create `/SCRIPTS/TOOLS/` on the radio if it does not already exist so phrase history can be saved.
+Copy the matching `.lua` script to the radio's scripts directory and launch it through the radio firmware's Lua tool interface. Create `/SCRIPTS/TOOLS/` on the radio if it does not already exist so phrase history can be saved. `/AX12LUA/SCRIPTS/TOOLS/` on RadioMaster AX12.
 
 If the black-and-white script runs out of memory on a TBS radio, use the bundled precompiled version, [`src/bw/elrs-bind.luac`](src/bw/elrs-bind.luac), instead of the `.lua` source file.
 
