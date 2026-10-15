@@ -77,6 +77,8 @@ local bwLastStatus=nil
 local bwStatusAt=0
 local BW_STATUS_TICKS=300
 local history={}
+local bothRxWriteQueued=nil
+local bothPhrase=nil
 local historyOpen=false
 local historySelected=nil
 local historyFirst=nil
@@ -129,7 +131,8 @@ local function historyLoad()
     local part=io.read(f,math.min(64,HISTORY_READ_LIMIT-bytesRead))
     if not part or #part==0 then break end
     bytesRead=bytesRead+#part
-    local data=carry..part
+    local data=part
+    if carry~="" then data=carry..part end
     local pos=1
     carry=""
     while true do
@@ -265,10 +268,11 @@ local function pushMsp(frame,dest,cmd,text)
     for i=1,#text do out[6+i]=string.byte(text,i) end
   end
   out[4]=n
-  for i=#out,6+n+1,-1 do out[i]=nil end
+  for i=#out,6+n,-1 do out[i]=nil end
   return crossfireTelemetryPush(frame,out)
 end
 local function writeUid(dest,u)
+  for i=#out,13,-1 do out[i]=nil end
   out[1]=dest;out[2]=HANDSET;out[3]=MSP_V1+MSP_START;out[4]=7;out[5]=MSP_FN;out[6]=UID_CMD
   for i=1,6 do out[6+i]=u[i] end
   return crossfireTelemetryPush(MSP_WRITE,out)
@@ -300,9 +304,9 @@ local function drain()
 
     if c==MSP_RESP then
       local src=decodeUid(d)
-      if src and uidReadDest and src==uidReadDest and attempts>0 and timer=="uid" and uidGuardUntil>getTime() then
+      if src and (src==TX or src==RX) and uidReadDest and attempts>0 and timer=="uid" and uidGuardUntil>getTime() then
         for i=1,6 do uid[i]=d[6+i] end
-        uidFrom=src
+        uidFrom=uidReadDest
         uidTimeoutRecovery=false
         status=nil
         attempts=0
@@ -319,8 +323,7 @@ end
 -- ---------------------------------------------------------------------------
 -- UID text parsing. A comma-separated 4..6 byte string is treated as raw UID.
 -- ---------------------------------------------------------------------------
-local function parseByte(s)
-  local i,j=1,#s
+local function parseByte(s,i,j)
   while i<=j and string.byte(s,i)==32 do i=i+1 end
   while j>=i and string.byte(s,j)==32 do j=j-1 end
   if i>j or j-i>2 then return nil end
@@ -333,22 +336,19 @@ local function parseByte(s)
   return n<=255 and n or nil
 end
 local function parseUidText(s)
-  -- Parse at most six segments directly into uid to avoid two temporary tables.
+  -- Parse ranges in place; do not allocate one substring per UID byte.
   local count,pos=0,1
   for i=1,6 do uid[i]=0 end
   while pos<=#s do
     local q=string.find(s,",",pos,true)
-    local part
-    if q then
-      if q==#s then return nil end
-      part=string.sub(s,pos,q-1);pos=q+1
-    else
-      part=string.sub(s,pos);pos=#s+1
-    end
-    local n=parseByte(part)
+    local last=q and q-1 or #s
+    if q==#s then return nil end
+    local n=parseByte(s,pos,last)
     if not n or count>=6 then return nil end
     count=count+1
     uid[count]=n
+    if not q then break end
+    pos=q+1
   end
   if count<4 then return nil end
   if count<6 then
@@ -527,16 +527,17 @@ local function retryUid()
   attempts=attempts+1
   schedule(RETRY,"uid")
 end
-local function setOne(which)
+local function setOne(which,value)
   local dest=(which==TARGET_TX) and TX or RX
-  local u=parseUidText(phrase)
+  if value==nil then value=phrase end
+  local u=parseUidText(value)
   if u then
     for i=1,6 do uid[i]=u[i] end
     if writeUid(dest,uid) then return true end
   else
-    if phrase=="" then status="Phrase is empty";return false end
-    if #phrase>PHRASE_MAX then status="Phrase > 52 chars";return false end
-    if pushMsp(MSP_WRITE,dest,PHRASE_CMD,phrase) then return true end
+    if value=="" then status="Phrase is empty";return false end
+    if #value>PHRASE_MAX then status="Phrase > 52 chars";return false end
+    if pushMsp(MSP_WRITE,dest,PHRASE_CMD,value) then return true end
   end
   status="Telemetry busy"
   return false
@@ -546,12 +547,13 @@ local function startSet()
   if #phrase>PHRASE_MAX then status="Phrase > 52 chars";return end
   if timer=="bothTX" or timer=="rebindDone" then status="Finish current operation first";return end
   if target==TARGET_BOTH then
-    if linkState~=LINK_UP then status="RX link not active";return end
     bindRefreshRx=false;uidTimeoutRecovery=false
     abandonUidRequest()
     uidFrom=nil
+    bothPhrase=phrase
     status="Setting RX..."
-    if setOne(TARGET_RX) then historyAdd(phrase)
+    bothRxWriteQueued=setOne(TARGET_RX,bothPhrase)
+    if bothRxWriteQueued then historyAdd(bothPhrase)
     else status="RX write busy; continuing with TX..." end
     schedule(WRITE_SETTLE,"bothTX")
   else
@@ -568,10 +570,36 @@ local function processTimer()
   local k=timer;cancel()
   if k=="uid" then retryUid()
   elseif k=="bothTX" then
-    target=TARGET_TX;status="Setting TX..."
-    if setOne(TARGET_TX) and history[1]~=phrase then historyAdd(phrase) end
-    schedule(WRITE_SETTLE,"readBack")
+    target=TARGET_TX
+    status=(attempts==0) and "Setting TX..." or "Retrying TX..."
+    if setOne(TARGET_TX,bothPhrase) then
+      if history[1]~=bothPhrase then historyAdd(bothPhrase) end
+      attempts=0
+      if bothRxWriteQueued then
+        status="Phrase sent"
+        bothRxWriteQueued=nil
+        bothPhrase=nil
+        schedule(WRITE_SETTLE,"readBack")
+      else
+        status="TX sent; RX write busy"
+        bothRxWriteQueued=nil
+        bothPhrase=nil
+      end
+    else
+      attempts=attempts+1
+      if attempts<MAX_RETRY then
+        status=bothRxWriteQueued and "RX set; retrying TX..." or "Retrying TX..."
+        schedule(RETRY,"bothTX")
+      else
+        status=bothRxWriteQueued and "RX set; TX write busy" or "RX and TX writes busy"
+        attempts=0
+        bothRxWriteQueued=nil
+        bothPhrase=nil
+      end
+    end
   elseif k=="readBack" then
+    bothRxWriteQueued=nil
+    bothPhrase=nil
     attempts=0
     uidReadDest=nil
     startUidRead()
@@ -765,6 +793,8 @@ local function init()
   elrsStatusSeen=false;elrsStatusAt=0;elrsStatusPollAt=-ELRS_STATUS_POLL
   linkState=LINK_UNKNOWN;linkCandidate=nil;linkSamples=0;bindRefreshRx=false;uidTimeoutRecovery=false
   status="Reading UID...";attempts=0;cancel();edit=nil;exitRequested=false
+  bothRxWriteQueued=nil
+  bothPhrase=nil
   collectgarbage()
   schedule(1,"autoUid")
 end
