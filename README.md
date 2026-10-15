@@ -1,4 +1,4 @@
-# Unofficial ExpressLRS Bind Phrase Manager
+# ExpressLRS Bind Phrase Manager
 
 This repository contains two unofficial Lua scripts for managing ExpressLRS bind phrases and receiver UIDs on radio systems outside the EdgeTX versions officially supported by the upstream ExpressLRS Lua tools.
 
